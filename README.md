@@ -43,6 +43,30 @@ Currently verified reductions are `count`, `sum`, `mean`, `min`, and `max`.
 Explicit `x_range` and `y_range` values are required to preserve a true
 single-pass pipeline.
 
+## NYC Taxi real-data verification
+
+The streaming accumulator successfully rendered all **11,842,094 pickup
+locations** in HoloViz's transformed
+[January 2015 NYC Taxi dataset](https://examples.holoviz.org/gallery/nyc_taxi/nyc_taxi.html).
+The 385 MB Parquet file was decoded as 48 Arrow/Pandas batches of at most
+250,000 rows; the complete table was never materialized as one DataFrame.
+
+![Datashader rendering of 11.8 million January 2015 NYC taxi pickups](docs/assets/nyc-taxi-pickups.png)
+
+One warm-cache Linux run produced the 1200-by-700 image in 3.24 seconds with
+514 MiB peak process RSS. Runtime and memory will vary by machine. Reproduce it
+with:
+
+```bash
+uv sync --extra data
+uv run python examples/nyc_taxi.py --download
+```
+
+This benchmark validates `StreamingCanvas` against a real large dataset on
+native Python. The current WebAssembly site does not yet include a Parquet
+reader, so it does **not** claim an end-to-end browser run of this file.
+DuckDB-Wasm/Arrow browser ingestion is the next milestone.
+
 ## Browser runtime
 
 The initial deployment target is JupyterLite with the Xeus-Python WebAssembly

@@ -27,6 +27,10 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+data = [
+    "pillow>=11",
+    "pyarrow>=21",
+]
 test = [
     "pytest>=8",
 ]
@@ -42,4 +46,3 @@ packages = ["src/datashader_browser"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-ra"
-
