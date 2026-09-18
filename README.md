@@ -6,6 +6,9 @@ WebAssembly—without assuming that the complete dataset fits in browser memory.
 This is an early, independent project. It is not yet an official HoloViz
 project and is not affiliated with or endorsed by the Datashader maintainers.
 
+[Try the live browser demo](https://sumayabee.github.io/datashader-browser/).
+Open `streaming-points.ipynb` and run all cells.
+
 ## What works now
 
 The first vertical slice is a bounded-memory point aggregator:
@@ -46,7 +49,9 @@ The initial deployment target is JupyterLite with the Xeus-Python WebAssembly
 kernel. Its environment is described in [`environment.yml`](environment.yml)
 and uses the experimental Numba and llvmlite packages from emscripten-forge.
 The kernel executes in a Web Worker, keeping aggregation off the browser UI
-thread.
+thread. The first visit downloads a sizeable scientific-Python environment, so
+the cold kernel start can take roughly a minute; subsequent use benefits from
+the browser cache.
 
 ```bash
 uv sync --extra test
