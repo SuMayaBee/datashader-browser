@@ -1,0 +1,26 @@
+name: datashader-browser
+channels:
+  - https://prefix.dev/emscripten-forge-4x
+  - https://prefix.dev/conda-forge
+dependencies:
+  - xeus-python
+  - python >=3.13
+  - numba ==0.67.0
+  - llvmlite ==0.49.0
+  - numpy ==2.4.*
+  - pandas
+  - scipy
+  - xarray
+  - bokeh
+  - pillow
+  - colorcet
+  - multipledispatch
+  - packaging
+  - param
+  - pyct
+  - requests
+  - toolz
+  - pip:
+      - datashader==0.19.1
+      - .
+
