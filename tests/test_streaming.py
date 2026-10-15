@@ -6,7 +6,7 @@ import pytest
 import xarray as xr
 
 import datashader as ds
-from datashader_browser import Progress, StreamingCanvas
+from datashader_browser import Progress, StreamingCanvas, iter_parquet_batches
 
 
 @pytest.fixture
@@ -66,3 +66,54 @@ def test_schema_change_is_rejected():
     with pytest.raises(TypeError, match="matching Datashader schemas"):
         canvas.points([first, second], "x", "y")
 
+
+def test_arrow_record_batches_match_datashader(frame):
+    pa = pytest.importorskip("pyarrow")
+    table = pa.Table.from_pandas(frame, preserve_index=False)
+    batches = table.to_batches(max_chunksize=997)
+    kwargs = dict(plot_width=321, plot_height=177, x_range=(-10, 10), y_range=(-5, 5))
+
+    expected = ds.Canvas(**kwargs).points(frame, "x", "y", agg=ds.mean("value"))
+    actual = StreamingCanvas(**kwargs).points(
+        batches,
+        "x",
+        "y",
+        agg=ds.mean("value"),
+    )
+
+    xr.testing.assert_equal(actual.drop_attrs(), expected.drop_attrs())
+    assert actual.attrs["source_chunks"] == len(batches)
+    assert actual.attrs["source_rows"] == len(frame)
+
+
+def test_parquet_batches_are_projected_and_bounded(frame, tmp_path):
+    pq = pytest.importorskip("pyarrow.parquet")
+    path = tmp_path / "points.parquet"
+    pq.write_table(
+        pytest.importorskip("pyarrow").Table.from_pandas(frame, preserve_index=False),
+        path,
+        row_group_size=4_000,
+    )
+
+    batches = list(
+        iter_parquet_batches(
+            path,
+            batch_size=1_001,
+            columns=["x", "y"],
+        )
+    )
+
+    assert sum(batch.num_rows for batch in batches) == len(frame)
+    assert max(batch.num_rows for batch in batches) <= 1_001
+    assert batches[0].schema.names == ["x", "y"]
+
+
+def test_parquet_batches_reject_invalid_size():
+    with pytest.raises(ValueError, match="greater than zero"):
+        next(iter_parquet_batches("unused.parquet", batch_size=0))
+
+
+def test_unsupported_chunk_type_is_rejected():
+    canvas = StreamingCanvas(x_range=(0, 1), y_range=(0, 1))
+    with pytest.raises(TypeError, match="Arrow-compatible"):
+        canvas.points([{"x": [0.1], "y": [0.2]}], "x", "y")

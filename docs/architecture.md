@@ -18,7 +18,7 @@ Browser UI / Bokeh / Panel
           | viewport + reduction request
           v
 Xeus-Python Web Worker
-  StreamingCanvas -> Datashader compiler -> aggregate -> shade
+  PyArrow local Parquet -> StreamingCanvas -> Datashader compiler -> aggregate -> shade
           ^
           | bounded chunks / Arrow IPC
           |
@@ -26,8 +26,10 @@ Data worker (planned)
   DuckDB-Wasm -> Parquet / CSV / OPFS / HTTP range requests
 ```
 
-The current implementation covers the Xeus-Python aggregation box. The data
-worker is the next milestone.
+The current implementation covers Xeus-Python aggregation and local Parquet
+record batches in that worker. A separate data worker remains the next
+milestone for DuckDB-Wasm, remote files, viewport pruning, and transferable
+buffers.
 
 ## Why streaming changes the memory equation
 
@@ -107,4 +109,3 @@ across chunks. This project pins Datashader to the 0.19 series and tests every
 supported reduction against the normal `Canvas.points` result. A future
 upstream public streaming accumulator would remove this dependency on private
 interfaces.
-

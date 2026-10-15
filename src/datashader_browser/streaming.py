@@ -9,7 +9,7 @@ foundation for later Arrow and DuckDB-Wasm sources.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable, Iterator
+from collections.abc import Callable, Iterable, Iterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -58,8 +58,48 @@ def iter_csv_chunks(
     )
 
 
+def iter_parquet_batches(
+    source: Any,
+    *,
+    batch_size: int = 250_000,
+    columns: Sequence[str] | None = None,
+    row_groups: Sequence[int] | None = None,
+    use_threads: bool = False,
+) -> Iterator[Any]:
+    """Yield bounded-size Arrow record batches from a Parquet source.
+
+    ``source`` may be a path or any seekable file object accepted by
+    :class:`pyarrow.parquet.ParquetFile`.  In JupyterLite/Xeus-Python this
+    includes files uploaded or mounted in the browser filesystem.  PyArrow is
+    imported lazily so CSV-only users do not need the optional dependency.
+
+    Arrow batches are intentionally returned without first materializing a
+    complete Pandas DataFrame. :meth:`StreamingCanvas.points` converts one
+    batch at a time immediately before aggregation.
+    """
+
+    if batch_size <= 0:
+        raise ValueError("batch_size must be greater than zero")
+
+    try:
+        import pyarrow.parquet as pq
+    except ImportError as exc:  # pragma: no cover - depends on optional install
+        raise ImportError(
+            "Parquet streaming requires PyArrow; install "
+            "datashader-browser[data]"
+        ) from exc
+
+    parquet = pq.ParquetFile(source)
+    yield from parquet.iter_batches(
+        batch_size=batch_size,
+        row_groups=None if row_groups is None else list(row_groups),
+        columns=None if columns is None else list(columns),
+        use_threads=use_threads,
+    )
+
+
 class StreamingCanvas:
-    """A Datashader canvas that consumes an iterable of DataFrame chunks.
+    """A Datashader canvas that consumes Pandas or Arrow chunks.
 
     Unlike ``datashader.Canvas.points``, the full source is never retained.
     The current implementation requires explicit ranges so aggregation stays
@@ -94,7 +134,7 @@ class StreamingCanvas:
 
     def points(
         self,
-        chunks: Iterable[pd.DataFrame],
+        chunks: Iterable[Any],
         x: str,
         y: str,
         *,
@@ -203,13 +243,23 @@ class StreamingCanvas:
         )
 
 
-def _prepare_chunk(chunk: pd.DataFrame, glyph: Point, reduction: Any):
+def _prepare_chunk(chunk: Any, glyph: Point, reduction: Any):
     if not isinstance(chunk, pd.DataFrame):
-        raise TypeError(f"each chunk must be a pandas DataFrame, received {type(chunk)!r}")
+        to_pandas = getattr(chunk, "to_pandas", None)
+        if to_pandas is None or not callable(to_pandas):
+            raise TypeError(
+                "each chunk must be a pandas DataFrame or Arrow-compatible "
+                f"record batch, received {type(chunk)!r}"
+            )
+        chunk = to_pandas()
+        if not isinstance(chunk, pd.DataFrame):
+            raise TypeError(
+                "chunk.to_pandas() must return a pandas DataFrame, received "
+                f"{type(chunk)!r}"
+            )
     return _bypixel_sanitise(chunk, glyph, reduction)
 
 
-def _prepend(first: pd.DataFrame, rest: Iterator[pd.DataFrame]) -> Iterator[pd.DataFrame]:
+def _prepend(first: Any, rest: Iterator[Any]) -> Iterator[Any]:
     yield first
     yield from rest
-

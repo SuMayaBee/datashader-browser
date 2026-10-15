@@ -15,14 +15,12 @@ import json
 import resource
 import time
 import urllib.request
-from collections.abc import Iterator
 from pathlib import Path
 
-import pandas as pd
 import pyarrow.parquet as pq
 
 import datashader.transfer_functions as tf
-from datashader_browser import Progress, StreamingCanvas
+from datashader_browser import Progress, StreamingCanvas, iter_parquet_batches
 
 
 DATA_URL = "https://datasets.holoviz.org/nyc_taxi/v1/nyc_taxi_wide.parq"
@@ -46,18 +44,6 @@ def download(url: str, destination: Path) -> None:
     with urllib.request.urlopen(request) as response, destination.open("wb") as output:
         while block := response.read(1024 * 1024):
             output.write(block)
-
-
-def parquet_chunks(path: Path, batch_size: int) -> Iterator[pd.DataFrame]:
-    """Decode only the coordinate columns, one Arrow batch at a time."""
-
-    parquet = pq.ParquetFile(path)
-    for batch in parquet.iter_batches(
-        batch_size=batch_size,
-        columns=["pickup_x", "pickup_y"],
-        use_threads=True,
-    ):
-        yield batch.to_pandas()
 
 
 def peak_rss_mib() -> float:
@@ -94,7 +80,12 @@ def main() -> None:
         y_range=Y_RANGE,
     )
     aggregate = canvas.points(
-        parquet_chunks(args.data, args.batch_size),
+        iter_parquet_batches(
+            args.data,
+            batch_size=args.batch_size,
+            columns=["pickup_x", "pickup_y"],
+            use_threads=True,
+        ),
         "pickup_x",
         "pickup_y",
         on_progress=report,

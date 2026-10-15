@@ -17,7 +17,7 @@ The first vertical slice is a bounded-memory point aggregator:
 import datashader as ds
 import datashader.transfer_functions as tf
 
-from datashader_browser import StreamingCanvas, iter_csv_chunks
+from datashader_browser import StreamingCanvas, iter_csv_chunks, iter_parquet_batches
 
 source = iter_csv_chunks(
     "points.csv",
@@ -33,6 +33,12 @@ canvas = StreamingCanvas(
 )
 aggregate = canvas.points(source, "longitude", "latitude", agg=ds.mean("value"))
 image = tf.shade(aggregate)
+
+# A local Parquet file can yield projected Arrow record batches directly.
+parquet_source = iter_parquet_batches(
+    "points.parquet", columns=["longitude", "latitude"], batch_size=250_000
+)
+aggregate = canvas.points(parquet_source, "longitude", "latitude", agg=ds.count())
 ```
 
 Only one input chunk and Datashader's fixed-size aggregate buffers are live at
@@ -63,9 +69,11 @@ uv run python examples/nyc_taxi.py --download
 ```
 
 This benchmark validates `StreamingCanvas` against a real large dataset on
-native Python. The current WebAssembly site does not yet include a Parquet
-reader, so it does **not** claim an end-to-end browser run of this file.
-DuckDB-Wasm/Arrow browser ingestion is the next milestone.
+native Python. The browser build now includes an experimental PyArrow Parquet
+reader: open `nyc-taxi-browser.ipynb`, place the source file in the browser
+filesystem, and it streams projected Arrow record batches through the same
+accumulator. Full 385 MB end-to-end browser timing and memory results are still
+an explicit validation task, not a claim made by this repository.
 
 ## Browser runtime
 
@@ -73,9 +81,10 @@ The initial deployment target is JupyterLite with the Xeus-Python WebAssembly
 kernel. Its environment is described in [`environment.yml`](environment.yml)
 and uses the experimental Numba and llvmlite packages from emscripten-forge.
 The kernel executes in a Web Worker, keeping aggregation off the browser UI
-thread. The first visit downloads a sizeable scientific-Python environment, so
-the cold kernel start can take roughly a minute; subsequent use benefits from
-the browser cache.
+thread. The Parquet-capable build is currently about 256 MB because PyArrow
+brings compiled Arrow and compression dependencies; this is an engineering
+baseline, not the final delivery architecture. The first visit therefore needs
+a substantial download, while subsequent use benefits from the browser cache.
 
 ```bash
 uv sync --extra test
@@ -94,7 +103,7 @@ uv run jupyter lite build \
 “In the browser” does not mean that an unlimited dataset can be copied into a
 Pandas DataFrame. The project uses three execution levels:
 
-1. **Stream:** scan CSV or Arrow batches through a bounded-memory Datashader
+1. **Stream:** scan CSV or local Parquet/Arrow batches through a bounded-memory Datashader
    accumulator. Total row count affects time, not peak aggregate memory.
 2. **Prune:** use Parquet row groups, spatial partitions, and DuckDB-Wasm to
    read only the viewport and required columns.

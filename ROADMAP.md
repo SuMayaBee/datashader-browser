@@ -10,7 +10,7 @@
 
 ## 0.2: browser data plane
 
-- Arrow IPC record-batch source.
+- Local Parquet record-batch source via PyArrow in the Xeus-Python worker.
 - DuckDB-Wasm worker for local and remote Parquet.
 - Column projection and viewport predicates.
 - Transferable buffers between the data worker and Python worker.
@@ -33,4 +33,3 @@
 
 Polygons, trimesh, quadmesh, Dask, CUDA, and arbitrary row-index reductions are
 outside the initial scope.
-
