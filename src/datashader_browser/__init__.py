@@ -8,4 +8,4 @@ __all__ = [
     "iter_csv_chunks",
     "iter_parquet_batches",
 ]
-__version__ = "0.1.0a1"
+__version__ = "0.1.0a2"

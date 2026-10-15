@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "datashader-browser"
-version = "0.1.0a1"
+version = "0.1.0a2"
 description = "Bounded-memory Datashader pipelines for Python running in the browser"
 readme = "README.md"
 requires-python = ">=3.10"
