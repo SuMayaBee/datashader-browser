@@ -1,0 +1,46 @@
+name: Publish to PyPI
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build release distributions
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - name: Verify tag matches package version
+        run: test "$(uv run python -c 'from datashader_browser import __version__; print(__version__)')" = "${GITHUB_REF_NAME#v}"
+      - name: Build wheel and source distribution
+        run: uv build --out-dir release-dist
+      - name: Validate package metadata
+        run: uv run --with twine twine check release-dist/*
+      - uses: actions/upload-artifact@v4
+        with:
+          name: python-distributions
+          path: release-dist/
+
+  publish:
+    name: Publish release to PyPI
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/datashader-browser
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: python-distributions
+          path: release-dist/
+      - name: Publish package distributions to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
