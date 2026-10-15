@@ -99,6 +99,25 @@ def test_arrow_record_batches_use_browser_safe_conversion(frame, monkeypatch):
     assert actual.attrs["source_rows"] == len(frame)
 
 
+def test_empty_arrow_batch_preserves_schema_in_browser(monkeypatch):
+    pa = pytest.importorskip("pyarrow")
+    batch = pa.record_batch(
+        [pa.array([], type=pa.float64()), pa.array([], type=pa.float64())],
+        names=["x", "y"],
+    )
+    monkeypatch.setattr("datashader_browser.streaming.sys.platform", "emscripten")
+
+    actual = StreamingCanvas(
+        plot_width=10,
+        plot_height=10,
+        x_range=(0, 1),
+        y_range=(0, 1),
+    ).points([batch], "x", "y")
+
+    assert actual.attrs["source_rows"] == 0
+    assert int(actual.values.sum()) == 0
+
+
 def test_parquet_batches_are_projected_and_bounded(frame, tmp_path):
     pq = pytest.importorskip("pyarrow.parquet")
     path = tmp_path / "points.parquet"

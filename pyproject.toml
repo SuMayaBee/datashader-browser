@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "datashader-browser"
-version = "0.1.0a2"
+version = "0.2.0a0"
 description = "Bounded-memory Datashader pipelines for Python running in the browser"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -31,7 +31,11 @@ data = [
     "pillow>=11",
     "pyarrow>=21",
 ]
+holoviews = [
+    "holoviews>=1.21,<2",
+]
 test = [
+    "holoviews>=1.21,<2",
     "pytest>=8",
 ]
 

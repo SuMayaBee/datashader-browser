@@ -26,10 +26,10 @@ Data worker (planned)
   DuckDB-Wasm -> Parquet / CSV / OPFS / HTTP range requests
 ```
 
-The current implementation covers Xeus-Python aggregation and local Parquet
-record batches in that worker. A separate data worker remains the next
-milestone for DuckDB-Wasm, remote files, viewport pruning, and transferable
-buffers.
+The current implementation covers Xeus-Python aggregation, repeatable local
+Parquet record-batch scans, and a HoloViews `RangeXY` adapter in that worker.
+A separate data worker remains the next milestone for DuckDB-Wasm, remote
+files, row-group/partition viewport pruning, and transferable buffers.
 
 ## Why streaming changes the memory equation
 

@@ -11,6 +11,9 @@
 ## 0.2: browser data plane
 
 - Local Parquet record-batch source via PyArrow in the Xeus-Python worker.
+- Repeatable `ParquetSource` with projected scans, bounds, and batch-local
+  viewport predicates.
+- HoloViews `DynamicMap`/`RangeXY` adapter for local zoom and pan rerendering.
 - DuckDB-Wasm worker for local and remote Parquet.
 - Column projection and viewport predicates.
 - Transferable buffers between the data worker and Python worker.
@@ -27,7 +30,7 @@
 
 - Lines with one-row partition overlap.
 - Categorical aggregation with explicit category budgets.
-- Panel/Bokeh integration outside the JupyterLab shell.
+- Panel application integration outside the JupyterLab shell.
 - Optional GPU aggregation experiments after CPU parity and memory behavior are
   characterized.
 

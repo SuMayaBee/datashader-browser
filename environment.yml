@@ -13,6 +13,8 @@ dependencies:
   - scipy
   - xarray
   - bokeh
+  - holoviews
+  - panel
   - pillow
   - colorcet
   - multipledispatch

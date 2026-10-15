@@ -49,6 +49,36 @@ Currently verified reductions are `count`, `sum`, `mean`, `min`, and `max`.
 Explicit `x_range` and `y_range` values are required to preserve a true
 single-pass pipeline.
 
+## Interactive HoloViews integration
+
+The optional HoloViews adapter connects Bokeh viewport events to repeatable,
+bounded Parquet scans:
+
+```bash
+pip install "datashader-browser[data,holoviews]"
+```
+
+```python
+from datashader_browser import ParquetSource
+from datashader_browser.holoviews import datashade
+
+source = ParquetSource("points.parquet", batch_size=250_000)
+plot = datashade(
+    source,
+    "longitude",
+    "latitude",
+    x_range=(-180, 180),
+    y_range=(-90, 90),
+)
+plot
+```
+
+HoloViews and Bokeh supply axes, zoom and pan tools, and dynamic plot updates.
+On each viewport change, the adapter calls `StreamingCanvas` and returns a new
+`RGB` element. The current PyArrow backend applies viewport predicates within
+each bounded batch but still scans the file sequentially. Spatially pruned
+reads remain a data-plane optimization rather than a current performance claim.
+
 ## NYC Taxi real-data verification
 
 The streaming accumulator successfully rendered all **11,842,094 pickup
@@ -91,6 +121,8 @@ Xeus-Python WebAssembly kernel. It created a 57.2 MB, two-million-row Parquet
 file in the browser filesystem, streamed it through 20 Arrow batches, checked
 the final row count, and rendered the shaded aggregate with no browser console
 errors. The full 385 MB NYC Taxi browser benchmark remains a separate task.
+`interactive-parquet.ipynb` is the HoloViews integration example; browser
+interaction validation is tracked separately from the existing static render.
 
 ```bash
 uv sync --extra test

@@ -256,7 +256,19 @@ def _prepare_chunk(chunk: Any, glyph: Point, reduction: Any):
         # Emscripten runtime.  Building the bounded DataFrame from Python
         # column values avoids that bridge while preserving the batch limit.
         if sys.platform == "emscripten" and callable(getattr(chunk, "to_pydict", None)):
-            chunk = pd.DataFrame(chunk.to_pydict())
+            values = chunk.to_pydict()
+            if len(chunk) == 0 and hasattr(chunk, "schema"):
+                chunk = pd.DataFrame(
+                    {
+                        field.name: pd.Series(
+                            values[field.name],
+                            dtype=field.type.to_pandas_dtype(),
+                        )
+                        for field in chunk.schema
+                    }
+                )
+            else:
+                chunk = pd.DataFrame(values)
         else:
             chunk = to_pandas()
         if not isinstance(chunk, pd.DataFrame):
