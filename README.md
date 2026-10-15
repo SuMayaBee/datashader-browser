@@ -86,6 +86,12 @@ brings compiled Arrow and compression dependencies; this is an engineering
 baseline, not the final delivery architecture. The first visit therefore needs
 a substantial download, while subsequent use benefits from the browser cache.
 
+Browser verification: `streaming-parquet.ipynb` has been run end-to-end in the
+Xeus-Python WebAssembly kernel. It created a 57.2 MB, two-million-row Parquet
+file in the browser filesystem, streamed it through 20 Arrow batches, checked
+the final row count, and rendered the shaded aggregate with no browser console
+errors. The full 385 MB NYC Taxi browser benchmark remains a separate task.
+
 ```bash
 uv sync --extra test
 uv run pytest

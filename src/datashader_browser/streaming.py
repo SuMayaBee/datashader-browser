@@ -12,6 +12,7 @@ from __future__ import annotations
 from collections.abc import Callable, Iterable, Iterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
+import sys
 from typing import Any
 
 import pandas as pd
@@ -251,7 +252,13 @@ def _prepare_chunk(chunk: Any, glyph: Point, reduction: Any):
                 "each chunk must be a pandas DataFrame or Arrow-compatible "
                 f"record batch, received {type(chunk)!r}"
             )
-        chunk = to_pandas()
+        # PyArrow's direct Arrow-to-Pandas bridge can stall in the current
+        # Emscripten runtime.  Building the bounded DataFrame from Python
+        # column values avoids that bridge while preserving the batch limit.
+        if sys.platform == "emscripten" and callable(getattr(chunk, "to_pydict", None)):
+            chunk = pd.DataFrame(chunk.to_pydict())
+        else:
+            chunk = to_pandas()
         if not isinstance(chunk, pd.DataFrame):
             raise TypeError(
                 "chunk.to_pandas() must return a pandas DataFrame, received "

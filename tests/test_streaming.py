@@ -86,6 +86,19 @@ def test_arrow_record_batches_match_datashader(frame):
     assert actual.attrs["source_rows"] == len(frame)
 
 
+def test_arrow_record_batches_use_browser_safe_conversion(frame, monkeypatch):
+    pa = pytest.importorskip("pyarrow")
+    batches = pa.Table.from_pandas(frame, preserve_index=False).to_batches(max_chunksize=997)
+    kwargs = dict(plot_width=321, plot_height=177, x_range=(-10, 10), y_range=(-5, 5))
+
+    monkeypatch.setattr("datashader_browser.streaming.sys.platform", "emscripten")
+    expected = ds.Canvas(**kwargs).points(frame, "x", "y", agg=ds.count())
+    actual = StreamingCanvas(**kwargs).points(batches, "x", "y", agg=ds.count())
+
+    xr.testing.assert_equal(actual.drop_attrs(), expected.drop_attrs())
+    assert actual.attrs["source_rows"] == len(frame)
+
+
 def test_parquet_batches_are_projected_and_bounded(frame, tmp_path):
     pq = pytest.importorskip("pyarrow.parquet")
     path = tmp_path / "points.parquet"

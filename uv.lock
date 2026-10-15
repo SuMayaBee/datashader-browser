@@ -235,7 +235,7 @@ wheels = [
 
 [[package]]
 name = "datashader-browser"
-version = "0.1.0a0"
+version = "0.1.0a1"
 source = { editable = "." }
 dependencies = [
     { name = "datashader" },
