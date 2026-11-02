@@ -84,12 +84,42 @@ viewport predicate before returning Arrow record batches. Parquet row-group
 statistics help only when the data layout makes the predicate selective;
 spatially sorted or partitioned data is therefore strongly preferred.
 
-### Indexed/tiled mode
+### Indexed/tiled mode (implemented: aggregate pyramid)
 
-For repeated pan and zoom over very large sources, the dataset must be divided
-by space and optionally by zoom level. A small manifest maps canvas bounds to
-Parquet partitions or precomputed aggregate tiles. The browser fetches only
-intersecting partitions and caches recent data in OPFS.
+For repeated pan and zoom, `build_pyramid` (or `datashader-browser
+build-tiles`) aggregates the source once into a pyramid of *reduction state*:
+point counts plus, per value column, non-null counts, sums, minima and maxima.
+Level `z` is a `tile_size * 2**z` square grid over the full extent, split into
+`tile_size` square tiles. Only non-empty bins are stored (`index` + one array
+per field in a compressed `.npz`), and `manifest.json` lists which tiles exist.
+
+```text
+build (once, native Python)                 view (browser, every pan/zoom)
+source chunks -> bin at max level           viewport -> choose level
+             -> pool 2x2 per level          -> fetch intersecting tiles (LRU cached)
+             -> sparse tiles + manifest     -> assemble -> finalize (mean = sum/count)
+                                            -> shade
+```
+
+**Exactness.** Binning reuses Datashader's scale/translate arithmetic and its
+truncate-then-clamp rule. Doubling the grid size multiplies every term of
+`x * s + t` by exactly two in IEEE arithmetic, so 2x2 pooling of level `z + 1`
+reproduces Datashader's binning at level `z`. Each level is therefore identical
+to `ds.Canvas(plot_width=n, plot_height=n, x_range=extent_x,
+y_range=extent_y).points(...)`, and a viewport is a slice of that aggregate.
+Tests check this for every level and reduction, and the NYC Taxi benchmark
+checks it on 11.8M real rows.
+
+**Resolution.** A viewport uses the coarsest level that gives at least the
+requested pixel count, so the returned aggregate has between one and about two
+bins per pixel. When even the deepest level cannot, the result is marked
+`under_resolved` and the HoloViews adapter switches to a raw scan of the
+viewport if a fallback source is given.
+
+**Scope.** Pyramids support `count`, `sum`, `mean`, `min` and `max` on points.
+Reductions that are not mergeable from these bases (e.g. `std` is possible
+later with a sum of squares; `first`, `last`, `mode` and categorical
+reductions are not) still need a scan.
 
 No client-only implementation can make a remote billion-row unsorted CSV
 interactive: every viewport would otherwise require downloading and scanning

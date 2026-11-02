@@ -79,6 +79,61 @@ On each viewport change, the adapter calls `StreamingCanvas` and returns a new
 each bounded batch but still scans the file sequentially. Spatially pruned
 reads remain a data-plane optimization rather than a current performance claim.
 
+## Instant zoom with tile pyramids
+
+Rescanning the source on every pan and zoom does not scale in a browser. A
+**tile pyramid** stores Datashader's reduction state (counts, sums, minima,
+maxima) at several resolutions. You build it once with ordinary Python and host
+it as static files. Each viewport then reads only the few small tiles it needs.
+
+```bash
+datashader-browser build-tiles nyc_taxi_wide.parq --x pickup_x --y pickup_y \
+    --x-range -8256000 -8209000 --y-range 4964000 4990000 \
+    --max-level 8 --values fare_amount --workers 8 --out tiles/
+```
+
+```python
+import datashader as ds
+from datashader_browser import ParquetSource, TilePyramid
+from datashader_browser.holoviews import datashade
+
+pyramid = TilePyramid("https://example.org/nyc/tiles")   # or a local folder
+datashade(pyramid, agg=ds.mean("fare_amount"),
+          fallback=ParquetSource("nyc_taxi_wide.parq"))  # raw scan past the deepest level
+```
+
+**Same results as Datashader.** Every level is identical to
+`ds.Canvas(plot_width=n, plot_height=n, ...).points(...)` over the full extent.
+Counts, minima and maxima match bit for bit, and sums and means match up to
+floating-point summation order. The test suite checks every level and reduction,
+and the NYC benchmark repeats the check on all 11.8 million real rows. This works
+because the binning reuses Datashader's own arithmetic, and doubling the grid
+scales it exactly (see [Architecture](docs/architecture.md)).
+
+**Browser results, NYC Taxi (11.8M rows)**, measured in headless Chrome 150 with
+the Xeus-Python WebAssembly kernel. Each row is an 800×500 render, and tile times
+are cold, fetched over HTTP:
+
+| Viewport | Points in view | Full Parquet scan | Tile pyramid | Tiles fetched |
+|---|---:|---:|---:|---:|
+| All NYC | 11,842,094 | 28.6 s | 0.07 s | 16 |
+| Manhattan | 11,229,897 | 26.7 s | 0.33 s | 71 |
+| Midtown | 3,694,079 | 8.9 s | 0.32 s | 70 |
+| Times Square | 254,473 | 0.79 s | 0.23 s | 63 |
+| One block | 19,095 | 0.22 s | 0.03 s | 9 |
+
+The scan columns also required downloading the 367 MiB Parquet file into the
+browser (2.3 s on localhost). The pyramid needed only `manifest.json` plus the
+visible tiles. Building that 9-level pyramid took 24 s natively with 8 threads
+and produced 25,245 tiles (176 MiB, including the four `fare_amount` fields). A
+7-level build is 3,208 tiles (52 MiB) and takes 6 s. Raw results are in
+[`docs/benchmarks/`](docs/benchmarks/). Reproduce them with
+`examples/benchmark_zoom.py` (native) and `examples/browser_benchmark.py`
+(browser).
+
+Pyramids support `count`, `sum`, `mean`, `min` and `max` on points. Other
+reductions still use a scan. Try `tile-pyramid.ipynb` in the live demo.
+
 ## NYC Taxi real-data verification
 
 The streaming accumulator successfully rendered all **11,842,094 pickup
@@ -99,11 +154,10 @@ uv run python examples/nyc_taxi.py --download
 ```
 
 This benchmark validates `StreamingCanvas` against a real large dataset on
-native Python. The browser build now includes an experimental PyArrow Parquet
-reader: open `nyc-taxi-browser.ipynb`, place the source file in the browser
-filesystem, and it streams projected Arrow record batches through the same
-accumulator. Full 385 MB end-to-end browser timing and memory results are still
-an explicit validation task, not a claim made by this repository.
+native Python. The same file has also been streamed end to end **inside the
+browser**: the full 367 MiB Parquet scan of all 11.8 million rows completed in
+28.6 s in the Xeus-Python WebAssembly kernel (see the table above). Browser
+peak memory has not yet been measured.
 
 ## Browser runtime
 
@@ -120,8 +174,8 @@ Browser verification: `streaming-parquet.ipynb` has been run end-to-end in the
 Xeus-Python WebAssembly kernel. It created a 57.2 MB, two-million-row Parquet
 file in the browser filesystem, streamed it through 20 Arrow batches, checked
 the final row count, and rendered the shaded aggregate with no browser console
-errors. The full 385 MB NYC Taxi browser benchmark remains a separate task.
-`interactive-parquet.ipynb` is the HoloViews integration example; browser
+errors. The full NYC Taxi file has since been scanned in the browser as well
+(see the tile pyramid section). `interactive-parquet.ipynb` is the HoloViews integration example; browser
 interaction validation is tracked separately from the existing static render.
 
 ```bash
@@ -145,12 +199,17 @@ Pandas DataFrame. The project uses three execution levels:
    accumulator. Total row count affects time, not peak aggregate memory.
 2. **Prune:** use Parquet row groups, spatial partitions, and DuckDB-Wasm to
    read only the viewport and required columns.
-3. **Tile:** for billion-row interactive datasets, fetch spatial partitions or
-   precomputed multiresolution aggregates instead of rescanning the source on
-   every zoom.
+3. **Tile (implemented):** fetch precomputed multi-resolution aggregate tiles
+   instead of rescanning the source on every zoom.
 
 See [Architecture](docs/architecture.md), [Research](docs/research.md), and the
 [roadmap](ROADMAP.md) for the engineering decisions and current limitations.
+
+## Progressive rendering
+
+`StreamingCanvas.points(..., on_partial=callback, partial_every=4)` passes the
+callback a finalized aggregate of everything scanned so far, so a long scan can
+show an image that fills in while it runs.
 
 ## Status
 

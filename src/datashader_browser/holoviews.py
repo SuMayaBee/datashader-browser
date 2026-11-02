@@ -7,6 +7,7 @@ from typing import Any
 
 import datashader as ds
 
+from .pyramid import TilePyramid
 from .sources import ParquetSource, Range
 from .streaming import CancelCallback, ProgressCallback, StreamingCanvas
 
@@ -14,9 +15,9 @@ DEFAULT_CMAP = ["#111827", "#1d4ed8", "#06b6d4", "#facc15", "#fff7ed"]
 
 
 def datashade(
-    source: ParquetSource,
-    x: str,
-    y: str,
+    source: ParquetSource | TilePyramid,
+    x: str | None = None,
+    y: str | None = None,
     *,
     agg: Any | None = None,
     x_range: Range | None = None,
@@ -25,6 +26,7 @@ def datashade(
     height: int = 500,
     cmap: Sequence[str] | str | None = None,
     how: str = "eq_hist",
+    fallback: ParquetSource | None = None,
     on_progress: ProgressCallback | None = None,
     cancelled: CancelCallback | None = None,
     transform: Callable[[Any], Any] | None = None,
@@ -32,18 +34,32 @@ def datashade(
     """Return a HoloViews DynamicMap rerendered for each visible viewport.
 
     HoloViews and Bokeh provide the interaction and display layers. This
-    adapter supplies only the missing bridge from ``RangeXY`` events to a
-    repeatable bounded-memory Parquet scan and ``StreamingCanvas``.
+    adapter supplies only the missing bridge from ``RangeXY`` events to one of
+    two data planes:
 
-    Viewport predicates are evaluated per Arrow batch. They reduce aggregation
-    work, but the current PyArrow backend still scans the source file for each
-    render. Spatial pruning remains a future data-plane optimization.
+    * :class:`ParquetSource` - a bounded-memory scan of the file on every
+      viewport change. Viewport predicates are evaluated per Arrow batch, so
+      work is reduced but the whole file is still read.
+    * :class:`TilePyramid` - only the precomputed aggregate tiles that
+      intersect the viewport are read, so pan and zoom cost is independent of
+      the number of source rows. When the viewport is zoomed past the deepest
+      level, ``fallback`` (if given) is scanned for full resolution.
     """
 
-    if not isinstance(source, ParquetSource):
-        raise TypeError("source must be a ParquetSource")
+    pyramid = source if isinstance(source, TilePyramid) else None
+    if pyramid is None and not isinstance(source, ParquetSource):
+        raise TypeError("source must be a ParquetSource or TilePyramid")
+    if fallback is not None and not isinstance(fallback, ParquetSource):
+        raise TypeError("fallback must be a ParquetSource")
     if width <= 0 or height <= 0:
         raise ValueError("width and height must be greater than zero")
+    if pyramid is not None:
+        x = pyramid.x if x is None else x
+        y = pyramid.y if y is None else y
+        if (x, y) != (pyramid.x, pyramid.y):
+            raise ValueError(f"pyramid was built for ({pyramid.x!r}, {pyramid.y!r})")
+    elif x is None or y is None:
+        raise ValueError("x and y are required for a ParquetSource")
 
     try:
         import holoviews as hv
@@ -58,7 +74,10 @@ def datashade(
         hv.extension("bokeh")
 
     if x_range is None or y_range is None:
-        source_x_range, source_y_range = source.bounds(x, y)
+        if pyramid is not None:
+            source_x_range, source_y_range = pyramid.x_range, pyramid.y_range
+        else:
+            source_x_range, source_y_range = source.bounds(x, y)
         x_range = source_x_range if x_range is None else x_range
         y_range = source_y_range if y_range is None else y_range
 
@@ -67,12 +86,7 @@ def datashade(
     reduction = ds.count() if agg is None else agg
     columns = _required_columns(x, y, reduction)
 
-    def render(
-        x_range: Range | None = initial_x_range,
-        y_range: Range | None = initial_y_range,
-    ) -> Any:
-        visible_x = _coerce_range(x_range, fallback=initial_x_range)
-        visible_y = _coerce_range(y_range, fallback=initial_y_range)
+    def scan(scan_source: ParquetSource, visible_x: Range, visible_y: Range) -> Any:
         canvas = StreamingCanvas(
             plot_width=width,
             plot_height=height,
@@ -80,7 +94,7 @@ def datashade(
             y_range=visible_y,
         )
         aggregate = canvas.points(
-            source.scan(
+            scan_source.scan(
                 columns=columns,
                 x=x,
                 y=y,
@@ -93,11 +107,31 @@ def datashade(
             on_progress=on_progress,
             cancelled=cancelled,
         )
+        aggregate.attrs["data_plane"] = "scan"
+        return aggregate
+
+    def render(
+        x_range: Range | None = initial_x_range,
+        y_range: Range | None = initial_y_range,
+    ) -> Any:
+        visible_x = _coerce_range(x_range, fallback=initial_x_range)
+        visible_y = _coerce_range(y_range, fallback=initial_y_range)
+        if pyramid is None:
+            aggregate = scan(source, visible_x, visible_y)
+        else:
+            aggregate = pyramid.aggregate(
+                visible_x, visible_y, width=width, height=height, agg=reduction
+            )
+            aggregate.attrs["data_plane"] = "tiles"
+            if fallback is not None and aggregate.attrs["under_resolved"]:
+                aggregate = scan(fallback, visible_x, visible_y)
+        image_x = aggregate.attrs["x_range"]
+        image_y = aggregate.attrs["y_range"]
         if transform is not None:
             aggregate = transform(aggregate)
 
         # HoloViews bounds use (left, bottom, right, top), not grouped ranges.
-        bounds = (visible_x[0], visible_y[0], visible_x[1], visible_y[1])
+        bounds = (image_x[0], image_y[0], image_x[1], image_y[1])
         image = hv.Image(aggregate, kdims=[x, y], bounds=bounds)
         rgb = hv_shade(
             image,
