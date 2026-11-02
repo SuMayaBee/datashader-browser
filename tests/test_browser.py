@@ -39,3 +39,43 @@ def test_placeholder_is_kept_when_tornado_is_not_installed(monkeypatch):
     repair_tornado_stub()
 
     assert sys.modules["tornado"] is placeholder
+
+
+def test_pending_client_comms_are_opened_from_the_kernel(monkeypatch):
+    from datashader_browser import browser
+
+    comm = types.ModuleType("comm")  # the Xeus-Python kernel provides the real one
+    monkeypatch.setitem(sys.modules, "comm", comm)
+
+    opened = []
+
+    class FakeKernelComm:
+        def __init__(self, target_name, data):
+            self.target_name = target_name
+
+    class FakeClient:
+        _comm = None
+
+        def _handle_open(self, kernel_comm, msg):
+            self._comm = kernel_comm
+            opened.append(kernel_comm.target_name)
+
+    comm.create_comm = FakeKernelComm
+    already_open = FakeClient()
+    already_open._comm = object()
+    monkeypatch.setattr(
+        browser, "_CLIENT_COMMS", {"plot-a": FakeClient(), "plot-b": already_open}
+    )
+
+    browser.open_pending_client_comms(None)
+
+    assert opened == ["plot-a"]
+    assert browser._CLIENT_COMMS == {}
+
+
+def test_kernel_opened_comms_are_a_no_op_outside_the_browser():
+    from datashader_browser import browser
+
+    browser.install_kernel_opened_comms()  # must not patch or display anything natively
+    pyviz_comms = pytest.importorskip("pyviz_comms")
+    assert not getattr(pyviz_comms.JupyterCommJS, "_datashader_browser_patched", False)

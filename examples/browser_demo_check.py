@@ -46,7 +46,7 @@ def run_in_new_cell(page, code: str, marker: str, timeout_s: float = 60) -> str:
     page.keyboard.press("Escape")
     page.keyboard.press("b")
     page.keyboard.press("Enter")
-    page.keyboard.type(code)
+    page.keyboard.insert_text(code)  # typing would trigger auto-indent
     page.keyboard.press("Shift+Enter")
     deadline = time.time() + timeout_s
     while time.time() < deadline:
@@ -88,11 +88,15 @@ def main() -> None:
             page.wait_for_timeout(3_000)
             page.locator(".lm-MenuBar-itemLabel", has_text="Run").first.click()
             page.locator(".lm-Menu-itemLabel", has_text="Run All Cells").first.click()
-            page.wait_for_function(
-                "[...document.querySelectorAll('.jp-OutputArea-output')]"
-                ".some(e => /pickups|Error/.test(e.innerText))",
-                timeout=300_000,
-            )
+            try:
+                page.wait_for_function(
+                    "[...document.querySelectorAll('.jp-OutputArea-output')]"
+                    ".some(e => /pickups|Error/.test(e.innerText))",
+                    timeout=300_000,
+                )
+            except Exception:
+                page.screenshot(path=str(args.shots / "failed.png"), full_page=True)
+                raise SystemExit(f"notebook produced no output:\n{outputs(page)[-3000:]}\n{errors[:5]}")
             try:
                 page.wait_for_selector(".jp-OutputArea canvas", timeout=120_000, state="attached")
             except Exception:
@@ -106,19 +110,34 @@ def main() -> None:
             plot = page.locator(".jp-OutputArea canvas").first
             plot.scroll_into_view_if_needed()
             page.screenshot(path=str(args.shots / "1-overview.png"))
-            before = run_in_new_cell(page, "print('TILES', pyramid.tiles_read)", "TILES")
+            before = run_in_new_cell(
+                page,
+                "import time\n"
+                "CALLS = []\n"
+                "_aggregate = pyramid.aggregate\n"
+                "def _timed(*a, **k):\n"
+                "    t = time.time(); r = _aggregate(*a, **k)\n"
+                "    CALLS.append((round(t, 2), round(time.time() - t, 3), r.attrs['pyramid_level']))\n"
+                "    return r\n"
+                "pyramid.aggregate = _timed\n"
+                "print('BEFORE', pyramid.tiles_read)",
+                "BEFORE",
+            )
 
             box = plot.bounding_box()
-            # Midtown Manhattan sits left of centre in the default extent.
-            page.mouse.move(box["x"] + box["width"] * 0.36, box["y"] + box["height"] * 0.58)
+            # Midtown Manhattan (x ~ -8.236e6, y ~ 4.976e6) in the default extent.
+            page.mouse.move(box["x"] + box["width"] * 0.43, box["y"] + box["height"] * 0.54)
             zoom_started = time.perf_counter()
-            for _ in range(10):
-                page.mouse.wheel(0, -300)
-                page.wait_for_timeout(250)
-            page.wait_for_timeout(4_000)
+            zoom_wall = time.time()
+            # A few wheel clicks, as a person would; each click zooms ~10%.
+            for _ in range(6):
+                page.mouse.wheel(0, -200)
+                page.wait_for_timeout(300)
+            page.wait_for_timeout(6_000)
             plot.scroll_into_view_if_needed()
             page.screenshot(path=str(args.shots / "2-zoomed.png"))
-            after = run_in_new_cell(page, "print('TILES', pyramid.tiles_read)", "TILES")
+            calls_cell_started = time.time()
+            after = run_in_new_cell(page, "print('AFTER', pyramid.tiles_read, 'CALLS', CALLS)", "AFTER")
             level = run_in_new_cell(
                 page,
                 "print('LEVEL', max(k[0] for k in pyramid._cache))",
@@ -130,6 +149,7 @@ def main() -> None:
     print(f"first render after page load: {first_render:.1f}s")
     print(f"before zoom: {before}; after zoom: {after}; deepest {level}")
     print(f"zoom interaction window: {time.perf_counter() - zoom_started:.1f}s")
+    print(f"zoom began at {zoom_wall:.2f}; inspection cell sent at {calls_cell_started:.2f}")
     print("page errors:", errors[:5] or "none")
     tiles_before = int(before.split()[1])
     tiles_after = int(after.split()[1])
