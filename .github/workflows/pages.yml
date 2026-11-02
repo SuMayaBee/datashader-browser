@@ -33,6 +33,24 @@ jobs:
           --XeusAddon.environment_file=environment.yml
           --contents content
           --output-dir dist
+      - name: Cache NYC Taxi data
+        uses: actions/cache@v4
+        with:
+          path: .cache/data
+          key: nyc-taxi-wide-v1
+      - name: Download NYC Taxi data
+        run: |
+          mkdir -p .cache/data
+          test -f .cache/data/nyc_taxi_wide.parq || curl -fL --retry 3 \
+            -o .cache/data/nyc_taxi_wide.parq \
+            https://datasets.holoviz.org/nyc_taxi/v1/nyc_taxi_wide.parq
+      - name: Build NYC Taxi tile pyramid
+        run: |
+          pip install ".[data]"
+          datashader-browser build-tiles .cache/data/nyc_taxi_wide.parq \
+            --x pickup_x --y pickup_y \
+            --x-range -8256000 -8209000 --y-range 4964000 4990000 \
+            --max-level 8 --workers 4 --out dist/tiles/nyc-taxi
       - uses: actions/upload-pages-artifact@v3
         with:
           path: dist

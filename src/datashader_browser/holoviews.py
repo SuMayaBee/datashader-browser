@@ -7,6 +7,7 @@ from typing import Any
 
 import datashader as ds
 
+from .browser import IN_BROWSER, repair_tornado_stub
 from .pyramid import TilePyramid
 from .sources import ParquetSource, Range
 from .streaming import CancelCallback, ProgressCallback, StreamingCanvas
@@ -61,6 +62,7 @@ def datashade(
     elif x is None or y is None:
         raise ValueError("x and y are required for a ParquetSource")
 
+    repair_tornado_stub()
     try:
         import holoviews as hv
         from holoviews.operation.datashader import shade as hv_shade
@@ -71,7 +73,13 @@ def datashade(
         ) from exc
 
     if "bokeh" not in hv.Store.renderers:
-        hv.extension("bokeh")
+        if IN_BROWSER:
+            # Embed BokehJS/Panel in the output. Loading them from the CDN is
+            # asynchronous in JupyterLite, and a plot displayed before the
+            # download finishes stays blank ("Bokeh or Panel library is missing").
+            hv.extension("bokeh", inline=True)
+        else:
+            hv.extension("bokeh")
 
     if x_range is None or y_range is None:
         if pyramid is not None:
