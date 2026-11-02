@@ -6,8 +6,14 @@ WebAssembly—without assuming that the complete dataset fits in browser memory.
 This is an early, independent project. It is not yet an official HoloViz
 project and is not affiliated with or endorsed by the Datashader maintainers.
 
-[Try the live browser demo](https://sumayabee.github.io/datashader-browser/).
-Open `streaming-points.ipynb` and run all cells.
+**[Open the NYC Taxi demo](https://sumayabee.github.io/datashader-browser/lab/index.html?path=nyc-taxi-tiles.ipynb)**:
+11.8 million taxi pickups that you can pan and zoom in your browser, with no
+install and no server. Run the cell, then scroll to zoom. The first load takes
+about 30 s while the Python kernel starts; after that, each zoom takes well
+under a second.
+
+The [live browser demo](https://sumayabee.github.io/datashader-browser/) also
+has the other example notebooks.
 
 ## What works now
 
@@ -189,6 +195,26 @@ uv run jupyter lite build \
   --contents content \
   --output-dir dist
 ```
+
+### Browser workarounds
+
+`datashader-browser` works around three problems in the current
+JupyterLite/Xeus-Python stack so interactive HoloViews plots work in the
+browser. They apply only in a browser kernel:
+
+- Xeus-Python registers an empty placeholder `tornado` module that hides the
+  real one, so HoloViews' Bokeh backend could not import. It is replaced
+  with the real package.
+- BokehJS and Panel are embedded inline. Loading them from the CDN raced
+  the first plot, which then stayed blank.
+- Xeus-Python (0.19.0, and `main` at the time of writing) rejects comms
+  opened by the page, so pan and zoom events never reached Python. The page
+  now registers a comm target and Python opens the channel after the cell
+  runs. Kernel-opened comms work, and comms carry messages both ways.
+
+`examples/browser_demo_check.py` checks this end to end. It runs the NYC
+notebook in JupyterLab under headless Chrome, zooms with the mouse wheel and
+confirms that Python re-rendered from deeper pyramid levels.
 
 ## Large-data strategy
 

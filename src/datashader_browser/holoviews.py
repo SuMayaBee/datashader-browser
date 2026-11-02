@@ -7,7 +7,7 @@ from typing import Any
 
 import datashader as ds
 
-from .browser import IN_BROWSER, repair_tornado_stub
+from .browser import IN_BROWSER, install_kernel_opened_comms, repair_tornado_stub
 from .pyramid import TilePyramid
 from .sources import ParquetSource, Range
 from .streaming import CancelCallback, ProgressCallback, StreamingCanvas
@@ -80,6 +80,8 @@ def datashade(
             hv.extension("bokeh", inline=True)
         else:
             hv.extension("bokeh")
+    # Xeus-Python drops page-opened comms, so zoom events need this (browser only).
+    install_kernel_opened_comms()
 
     if x_range is None or y_range is None:
         if pyramid is not None:
