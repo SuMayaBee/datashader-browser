@@ -71,7 +71,36 @@ def test_datashade_handles_an_empty_viewport(interactive_source):
 
 
 def test_datashade_validates_source_and_dimensions(interactive_source):
-    with pytest.raises(TypeError, match="ParquetSource"):
+    with pytest.raises(TypeError, match="ParquetSource or TilePyramid"):
         datashade(object(), "x", "y")
     with pytest.raises(ValueError, match="greater than zero"):
         datashade(interactive_source, "x", "y", width=0)
+
+
+def test_datashade_reads_tiles_and_falls_back_when_under_resolved(tmp_path):
+    pa = pytest.importorskip("pyarrow")
+    pq = pytest.importorskip("pyarrow.parquet")
+    hv = pytest.importorskip("holoviews")
+    from datashader_browser import TilePyramid, build_pyramid
+
+    rng = np.random.default_rng(3)
+    frame = pd.DataFrame({"x": rng.uniform(0, 100, 5_000), "y": rng.uniform(0, 100, 5_000)})
+    path = tmp_path / "points.parquet"
+    pq.write_table(pa.Table.from_pandas(frame, preserve_index=False), path)
+    source = ParquetSource(path, batch_size=1_000)
+    build_pyramid(
+        source.scan(), tmp_path / "tiles", "x", "y",
+        x_range=(0, 100), y_range=(0, 100), max_level=2, tile_size=16,
+    )
+    pyramid = TilePyramid(tmp_path / "tiles")
+
+    dynamic = datashade(pyramid, width=40, height=40, fallback=source)
+    overview = dynamic[()]
+    assert isinstance(overview, hv.RGB)
+    assert overview.data.attrs["data_plane"] == "tiles"
+    assert overview.data.attrs["pyramid_level"] == 2
+
+    dynamic.streams[0].event(x_range=(10.0, 12.0), y_range=(10.0, 12.0))
+    deep = dynamic[()]
+    assert deep.data.attrs["data_plane"] == "scan"
+    assert deep.data.attrs["x_range"] == (10.0, 12.0)

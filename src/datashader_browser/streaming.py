@@ -142,13 +142,23 @@ class StreamingCanvas:
         agg: Any | None = None,
         on_progress: ProgressCallback | None = None,
         cancelled: CancelCallback | None = None,
+        on_partial: Callable[[Any], None] | None = None,
+        partial_every: int = 4,
     ):
         """Aggregate point chunks while retaining only fixed-size state.
 
         The aggregation uses Datashader's compiler directly, so binning and
         reduction behavior match the native package rather than a separate
         reimplementation.
+
+        ``on_partial`` receives a finalized aggregate of everything seen so
+        far after every ``partial_every`` chunks, enabling progressive
+        rendering: shade and display it while the scan continues.  Each
+        partial costs one copy of the fixed-size aggregate state.
         """
+
+        if partial_every <= 0:
+            raise ValueError("partial_every must be greater than zero")
 
         reduction = ds.count() if agg is None else agg
         glyph = Point(x, y)
@@ -210,6 +220,26 @@ class StreamingCanvas:
         bounds = x_range + y_range
         bases = create((height, width))
 
+        x_axis = self._canvas.x_axis.compute_index(x_st, width)
+        y_axis = self._canvas.y_axis.compute_index(y_st, height)
+        coords = {glyph.x_label: x_axis, glyph.y_label: y_axis}
+        dims = [glyph.y_label, glyph.x_label]
+
+        def finish(state: Any, complete: bool) -> Any:
+            return finalize(
+                state,
+                cuda=False,
+                coords=coords,
+                dims=dims,
+                attrs={
+                    "x_range": x_range,
+                    "y_range": y_range,
+                    "source_chunks": processed_chunks,
+                    "source_rows": processed_rows,
+                    "complete": complete,
+                },
+            )
+
         processed_chunks = 0
         processed_rows = 0
 
@@ -227,21 +257,11 @@ class StreamingCanvas:
             processed_rows += len(prepared)
             if on_progress is not None:
                 on_progress(Progress(processed_chunks, processed_rows))
+            if on_partial is not None and processed_chunks % partial_every == 0:
+                # finalize may divide in place (e.g. mean), so partials use a copy.
+                on_partial(finish(tuple(base.copy() for base in bases), False))
 
-        x_axis = self._canvas.x_axis.compute_index(x_st, width)
-        y_axis = self._canvas.y_axis.compute_index(y_st, height)
-        return finalize(
-            bases,
-            cuda=False,
-            coords={glyph.x_label: x_axis, glyph.y_label: y_axis},
-            dims=[glyph.y_label, glyph.x_label],
-            attrs={
-                "x_range": x_range,
-                "y_range": y_range,
-                "source_chunks": processed_chunks,
-                "source_rows": processed_rows,
-            },
-        )
+        return finish(bases, True)
 
 
 def _prepare_chunk(chunk: Any, glyph: Point, reduction: Any):

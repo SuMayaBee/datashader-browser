@@ -21,10 +21,20 @@
 
 ## 0.3: indexed exploration
 
-- Spatially partitioned Parquet manifest format.
-- Partition pruning by canvas bounds.
-- Cache recent partitions in OPFS.
-- Progressive low-resolution then full-resolution rendering.
+- [x] Multi-resolution aggregate pyramid (`build_pyramid`, `TilePyramid`)
+  storing reduction state, with every level identical to native Datashader.
+- [x] `datashader-browser build-tiles` CLI with threaded binning and writing.
+- [x] HoloViews adapter reads only intersecting tiles; raw-scan fallback past
+  the deepest level.
+- [x] Progressive partial aggregates from `StreamingCanvas` (`on_partial`).
+- [ ] Separate files per field so remote viewers download only the fields a
+  reduction needs.
+- [ ] Lower build memory (external sort or per-band builds) for billion-row inputs.
+- [ ] Cache fetched tiles in OPFS across sessions.
+- [ ] Spatially partitioned raw Parquet so the deep-zoom fallback reads only
+  intersecting partitions.
+- [ ] Propose a public incremental aggregation API upstream
+  (draft: `docs/upstream-proposal.md`).
 
 ## Later
 

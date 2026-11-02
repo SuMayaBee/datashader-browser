@@ -1,0 +1,69 @@
+{
+  "viewports": [
+    {
+      "viewport": "NYC",
+      "scan_s": 0.224,
+      "tiles_cold_s": 0.0089,
+      "tiles_session_s": 0.0086,
+      "level": 2,
+      "tiles_fetched_cold": 16,
+      "tiles_fetched_session": 16,
+      "tile_mib_cold": 0.92,
+      "under_resolved": false,
+      "points_in_view": 11842094
+    },
+    {
+      "viewport": "Manhattan",
+      "scan_s": 0.24,
+      "tiles_cold_s": 0.0432,
+      "tiles_session_s": 0.0501,
+      "level": 4,
+      "tiles_fetched_cold": 71,
+      "tiles_fetched_session": 71,
+      "tile_mib_cold": 5.07,
+      "under_resolved": false,
+      "points_in_view": 11229897
+    },
+    {
+      "viewport": "Midtown",
+      "scan_s": 0.264,
+      "tiles_cold_s": 0.0454,
+      "tiles_session_s": 0.0535,
+      "level": 6,
+      "tiles_fetched_cold": 70,
+      "tiles_fetched_session": 70,
+      "tile_mib_cold": 8.86,
+      "under_resolved": false,
+      "points_in_view": 3694079
+    },
+    {
+      "viewport": "Times Sq",
+      "scan_s": 0.135,
+      "tiles_cold_s": 0.0216,
+      "tiles_session_s": 0.0227,
+      "level": 8,
+      "tiles_fetched_cold": 63,
+      "tiles_fetched_session": 63,
+      "tile_mib_cold": 1.98,
+      "under_resolved": false,
+      "points_in_view": 254473
+    },
+    {
+      "viewport": "Block",
+      "scan_s": 0.12,
+      "tiles_cold_s": 0.0037,
+      "tiles_session_s": 0.0005,
+      "level": 8,
+      "tiles_fetched_cold": 9,
+      "tiles_fetched_session": 0,
+      "tile_mib_cold": 0.24,
+      "under_resolved": false,
+      "points_in_view": 19095
+    }
+  ],
+  "exact": {
+    "count()": true,
+    "max('fare_amount')": true,
+    "mean('fare_amount')": true
+  }
+}

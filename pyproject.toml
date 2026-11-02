@@ -26,6 +26,9 @@ dependencies = [
     "pandas>=2.2",
 ]
 
+[project.scripts]
+datashader-browser = "datashader_browser.cli:main"
+
 [project.optional-dependencies]
 data = [
     "pillow>=11",

@@ -149,3 +149,21 @@ def test_unsupported_chunk_type_is_rejected():
     canvas = StreamingCanvas(x_range=(0, 1), y_range=(0, 1))
     with pytest.raises(TypeError, match="Arrow-compatible"):
         canvas.points([{"x": [0.1], "y": [0.2]}], "x", "y")
+
+
+def test_partial_aggregates_are_progressive(frame):
+    partials = []
+    kwargs = dict(plot_width=50, plot_height=30, x_range=(-10, 10), y_range=(-5, 5))
+    result = StreamingCanvas(**kwargs).points(
+        chunks(frame, 2_000), "x", "y", agg=ds.mean("value"),
+        on_partial=partials.append, partial_every=3,
+    )
+
+    assert [p.attrs["source_rows"] for p in partials] == [6_000, 12_000, 18_000]
+    assert not any(p.attrs["complete"] for p in partials)
+    assert result.attrs["complete"]
+    expected = ds.Canvas(**kwargs).points(frame.iloc[:6_000], "x", "y", agg=ds.mean("value"))
+    xr.testing.assert_allclose(partials[0].drop_attrs(), expected.drop_attrs())
+    # The final aggregate is not affected by finalizing partial copies.
+    full = ds.Canvas(**kwargs).points(frame, "x", "y", agg=ds.mean("value"))
+    xr.testing.assert_allclose(result.drop_attrs(), full.drop_attrs())

@@ -1,0 +1,56 @@
+{
+  "user_agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/150.0.0.0 Safari/537.36",
+  "viewports": [
+    {
+      "viewport": "NYC",
+      "scan_s": 28.629,
+      "points_in_view": 11842094,
+      "tiles_cold_s": 0.07249999999999801,
+      "tiles_fetched": 16,
+      "tiles_session_s": 0.062300000000000466,
+      "level": 2
+    },
+    {
+      "viewport": "Manhattan",
+      "scan_s": 26.680800000000005,
+      "points_in_view": 11229897,
+      "tiles_cold_s": 0.33079999999999643,
+      "tiles_fetched": 71,
+      "tiles_session_s": 0.2779000000000025,
+      "level": 4
+    },
+    {
+      "viewport": "Midtown",
+      "scan_s": 8.916300000000007,
+      "points_in_view": 3694079,
+      "tiles_cold_s": 0.31990000000000407,
+      "tiles_fetched": 70,
+      "tiles_session_s": 0.2938000000000045,
+      "level": 6
+    },
+    {
+      "viewport": "Times Sq",
+      "scan_s": 0.7909999999999968,
+      "points_in_view": 254473,
+      "tiles_cold_s": 0.2330000000000041,
+      "tiles_fetched": 63,
+      "tiles_session_s": 0.23609999999999332,
+      "level": 8
+    },
+    {
+      "viewport": "Block",
+      "scan_s": 0.21800000000000352,
+      "points_in_view": 19095,
+      "tiles_cold_s": 0.0344999999999942,
+      "tiles_fetched": 9,
+      "tiles_session_s": 0.0010000000000047748,
+      "level": 8
+    }
+  ],
+  "parquet_download_s": 2.2764000000000024,
+  "parquet_mib": 367.16371059417725,
+  "scan_warmup_s": 3.2986000000000004,
+  "manifest_s": 0.023099999999999454,
+  "tiles_warmup_s": 0.015000000000000568,
+  "page_total_s": 92.30674059900048
+}
