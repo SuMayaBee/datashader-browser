@@ -22,7 +22,7 @@ bit-identical.  Sums and means agree up to floating-point summation order.
 from __future__ import annotations
 
 from collections import OrderedDict
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Awaitable, Callable, Iterable, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 import io
@@ -352,6 +352,32 @@ def _browser_http_reader(base: str) -> Callable[[str], bytes]:  # pragma: no cov
     return read
 
 
+AsyncReader = Callable[[str], Awaitable[bytes]]
+
+
+def _default_async_reader(base: str) -> AsyncReader | None:
+    """Concurrent reads for an http(s) pyramid in the browser (``fetch``)."""
+
+    if sys.platform != "emscripten" or not base.startswith(("http://", "https://")):
+        return None
+    return _browser_fetch_reader(base)  # pragma: no cover
+
+
+def _browser_fetch_reader(base: str) -> AsyncReader:  # pragma: no cover
+    # pyjs makes JavaScript promises awaitable on the browser event loop, so
+    # many fetches can be in flight at once (unlike synchronous XHR).
+    import pyjs
+
+    async def read(name: str) -> bytes:
+        response = await pyjs.js.fetch(f"{base.rstrip('/')}/{name}")
+        if not bool(response.ok):
+            raise FileNotFoundError(f"{name}: HTTP {response.status}")
+        buffer = await response.arrayBuffer()
+        return bytes(pyjs.to_py(pyjs.js.Uint8Array.new(buffer)))
+
+    return read
+
+
 class TilePyramid:
     """Read a tile pyramid and assemble Datashader-compatible aggregates.
 
@@ -366,10 +392,17 @@ class TilePyramid:
         location: str | Path,
         *,
         reader: Callable[[str], bytes] | None = None,
+        async_reader: AsyncReader | None = None,
         cache_tiles: int = 256,
+        max_concurrent_reads: int = 16,
     ) -> None:
         self.location = str(location)
         self._read = reader or _default_reader(self.location)
+        self._read_async = async_reader or (
+            None if reader is not None else _default_async_reader(self.location)
+        )
+        self._max_concurrent_reads = max_concurrent_reads
+        self._inflight: dict[tuple[int, int, int], Any] = {}
         self.manifest = json.loads(self._read("manifest.json"))
         if self.manifest.get("format") != FORMAT:
             raise ValueError(f"{location} is not a {FORMAT} manifest")
@@ -431,6 +464,58 @@ class TilePyramid:
         fy = (y_range[1] - y_range[0]) / (self.y_range[1] - self.y_range[0])
         return fx * size, fy * size
 
+    def _span(self, level: int, x_range: Range, y_range: Range):
+        size = self.level_size(level)
+        sx, tx = _scale_translate(self.x_range, size)
+        sy, ty = _scale_translate(self.y_range, size)
+        x0, x1 = _bin_span(x_range, sx, tx, size)
+        y0, y1 = _bin_span(y_range, sy, ty, size)
+        return (x0, x1, y0, y1), (sx, tx, sy, ty)
+
+    def _tiles_for(self, level: int, bins: tuple[int, int, int, int]) -> list[tuple[int, int, int]]:
+        """Tiles that exist in the manifest and intersect a bin span."""
+
+        x0, x1, y0, y1 = bins
+        ts = self.tile_size
+        present = self._present.get(level, set())
+        return [
+            (level, row, col)
+            for row in range(y0 // ts, (y1 - 1) // ts + 1)
+            for col in range(x0 // ts, (x1 - 1) // ts + 1)
+            if (row, col) in present
+        ]
+
+    def _normalize(self, x_range, y_range, width, height, agg, level):
+        reduction = ds.count() if agg is None else agg
+        x_range = self.x_range if x_range is None else (float(x_range[0]), float(x_range[1]))
+        y_range = self.y_range if y_range is None else (float(y_range[0]), float(y_range[1]))
+        if level is None:
+            level = self.choose_level(x_range, y_range, width, height)
+        if not 0 <= level <= self.max_level:
+            raise ValueError(f"level must be between 0 and {self.max_level}")
+        return reduction, x_range, y_range, level
+
+    def tiles_needed(
+        self,
+        x_range: Range | None = None,
+        y_range: Range | None = None,
+        *,
+        width: int = 600,
+        height: int = 600,
+        level: int | None = None,
+    ) -> list[tuple[int, int, int]]:
+        """Return the ``(level, row, col)`` tiles a viewport needs."""
+
+        _, x_range, y_range, level = self._normalize(x_range, y_range, width, height, None, level)
+        bins, _ = self._span(level, x_range, y_range)
+        return self._tiles_for(level, bins)
+
+    def is_loaded(self, key: tuple[int, int, int]) -> bool:
+        """Whether a tile's bytes are cached (absent tiles count as loaded)."""
+
+        level, row, col = key
+        return key in self._cache or (row, col) not in self._present.get(level, ())
+
     def aggregate(
         self,
         x_range: Range | None = None,
@@ -440,6 +525,7 @@ class TilePyramid:
         height: int = 600,
         agg: Any | None = None,
         level: int | None = None,
+        cached_only: bool = False,
     ):
         """Return an aggregate covering the viewport as an ``xarray.DataArray``.
 
@@ -447,40 +533,126 @@ class TilePyramid:
         so the result has at least ``width x height`` bins when the pyramid is
         deep enough (and at most roughly twice that).  ``attrs`` record the
         level, the snapped ranges and whether the result is under-resolved.
+
+        With ``cached_only=True`` no tile is read.  The result uses the deepest
+        level at or above the chosen one whose tiles are all cached (a coarser
+        but complete image), and ``attrs["missing_tiles"]`` lists the tiles of
+        the chosen level still to fetch, e.g. with :meth:`fetch_tiles`.
         """
 
-        reduction = ds.count() if agg is None else agg
+        reduction, x_range, y_range, level = self._normalize(
+            x_range, y_range, width, height, agg, level
+        )
+        missing: list[tuple[int, int, int]] = []
+        if cached_only:
+            bins, _ = self._span(level, x_range, y_range)
+            missing = [k for k in self._tiles_for(level, bins) if not self.is_loaded(k)]
+            if missing:
+                for fallback in range(level - 1, -1, -1):
+                    bins, _ = self._span(fallback, x_range, y_range)
+                    if all(self.is_loaded(k) for k in self._tiles_for(fallback, bins)):
+                        break
+                else:
+                    fallback = level  # nothing complete: draw what is cached
+                return self._assemble(
+                    reduction, x_range, y_range, width, height, fallback,
+                    missing=missing, target_level=level, read=False,
+                )
+        return self._assemble(reduction, x_range, y_range, width, height, level, missing=missing)
+
+    async def fetch_tiles(self, keys: Iterable[tuple[int, int, int]]) -> int:
+        """Read tiles concurrently into the cache; return how many were read.
+
+        In the browser an ``http(s)`` pyramid uses ``fetch`` so the requests
+        overlap instead of paying one network round trip each.  Elsewhere,
+        reads run on a thread pool.  Tiles already cached or in flight are not
+        requested twice.
+        """
+
+        import asyncio
+
+        semaphore = asyncio.Semaphore(self._max_concurrent_reads)
+        loop = asyncio.get_running_loop()
+
+        async def read(name: str) -> bytes:
+            async with semaphore:
+                if self._read_async is not None:
+                    return await self._read_async(name)
+                if sys.platform == "emscripten":  # no threads in the browser
+                    return self._read(name)
+                return await loop.run_in_executor(None, self._read, name)
+
+        async def load(key: tuple[int, int, int]) -> bool:
+            level, row, col = key
+            data = await read(f"{level}/{row}-{col}.npz")
+            self._store(key, {"__npz__": data})
+            return True
+
+        waiters = []
+        started = 0
+        for key in dict.fromkeys(keys):
+            if self.is_loaded(key):
+                continue
+            future = self._inflight.get(key)
+            if future is None:
+                future = asyncio.ensure_future(load(key))
+                self._inflight[key] = future
+                future.add_done_callback(lambda _, key=key: self._inflight.pop(key, None))
+                started += 1
+            waiters.append(future)
+        if waiters:
+            await asyncio.gather(*waiters)
+        return started
+
+    async def aggregate_async(
+        self,
+        x_range: Range | None = None,
+        y_range: Range | None = None,
+        *,
+        width: int = 600,
+        height: int = 600,
+        agg: Any | None = None,
+        level: int | None = None,
+    ):
+        """Like :meth:`aggregate`, but fetch the needed tiles concurrently first."""
+
+        await self.fetch_tiles(
+            self.tiles_needed(x_range, y_range, width=width, height=height, level=level)
+        )
+        return self.aggregate(x_range, y_range, width=width, height=height, agg=agg, level=level)
+
+    def _assemble(
+        self,
+        reduction: Any,
+        x_range: Range,
+        y_range: Range,
+        width: int,
+        height: int,
+        level: int,
+        *,
+        missing: list[tuple[int, int, int]],
+        target_level: int | None = None,
+        read: bool = True,
+    ):
         field_names, finalize, name = self._reduction_fields(reduction)
-        x_range = self.x_range if x_range is None else (float(x_range[0]), float(x_range[1]))
-        y_range = self.y_range if y_range is None else (float(y_range[0]), float(y_range[1]))
-        if level is None:
-            level = self.choose_level(x_range, y_range, width, height)
-        if not 0 <= level <= self.max_level:
-            raise ValueError(f"level must be between 0 and {self.max_level}")
-
-        size = self.level_size(level)
-        sx, tx = _scale_translate(self.x_range, size)
-        sy, ty = _scale_translate(self.y_range, size)
-        x0, x1 = _bin_span(x_range, sx, tx, size)
-        y0, y1 = _bin_span(y_range, sy, ty, size)
-
+        (x0, x1, y0, y1), (sx, tx, sy, ty) = self._span(level, x_range, y_range)
         arrays = {
             field: np.full((y1 - y0, x1 - x0), _empty_value(field), _field_dtype(field))
             for field in field_names
         }
         ts = self.tile_size
-        for row in range(y0 // ts, (y1 - 1) // ts + 1):
-            for col in range(x0 // ts, (x1 - 1) // ts + 1):
-                tile = self._tile(level, row, col, field_names)
-                if tile is None:
-                    continue
-                ty0, tx0 = row * ts, col * ts
-                sy0, sy1 = max(y0, ty0), min(y1, ty0 + ts)
-                sx0, sx1 = max(x0, tx0), min(x1, tx0 + ts)
-                for field in field_names:
-                    arrays[field][sy0 - y0 : sy1 - y0, sx0 - x0 : sx1 - x0] = tile[field][
-                        sy0 - ty0 : sy1 - ty0, sx0 - tx0 : sx1 - tx0
-                    ]
+        for key in self._tiles_for(level, (x0, x1, y0, y1)):
+            if not read and key not in self._cache:
+                continue
+            _, row, col = key
+            tile = self._tile(level, row, col, field_names)
+            ty0, tx0 = row * ts, col * ts
+            sy0, sy1 = max(y0, ty0), min(y1, ty0 + ts)
+            sx0, sx1 = max(x0, tx0), min(x1, tx0 + ts)
+            for field in field_names:
+                arrays[field][sy0 - y0 : sy1 - y0, sx0 - x0 : sx1 - x0] = tile[field][
+                    sy0 - ty0 : sy1 - ty0, sx0 - tx0 : sx1 - tx0
+                ]
 
         import xarray as xr
 
@@ -489,7 +661,8 @@ class TilePyramid:
         ys = (np.arange(y0, y1) + 0.5 - ty) / sy
         snapped_x = ((x0 - tx) / sx, (x1 - tx) / sx)
         snapped_y = ((y0 - ty) / sy, (y1 - ty) / sy)
-        bins_x, bins_y = self.resolution(x_range, y_range, level)
+        goal = level if target_level is None else target_level
+        bins_x, bins_y = self.resolution(x_range, y_range, goal)
         return xr.DataArray(
             data,
             coords={self.y: ys, self.x: xs},
@@ -499,6 +672,8 @@ class TilePyramid:
                 "x_range": snapped_x,
                 "y_range": snapped_y,
                 "pyramid_level": level,
+                "target_level": goal,
+                "missing_tiles": missing,
                 "under_resolved": bool(bins_x < width / 2 or bins_y < height / 2),
             },
         )
@@ -556,11 +731,7 @@ class TilePyramid:
         key = (level, row, col)
         cached = self._cache.get(key)
         if cached is None:
-            cached = {"__npz__": self._read(f"{level}/{row}-{col}.npz")}
-            self.tiles_read += 1
-            self._cache[key] = cached
-            if len(self._cache) > self._cache_tiles:
-                self._cache.popitem(last=False)
+            cached = self._store(key, {"__npz__": self._read(f"{level}/{row}-{col}.npz")})
         else:
             self._cache.move_to_end(key)
 
@@ -574,6 +745,15 @@ class TilePyramid:
                     dense[index] = npz[name.replace(":", "__")]
                     cached[name] = dense.reshape(ts, ts)
         return {field: cached[field] for field in fields}
+
+
+    def _store(self, key: tuple[int, int, int], entry: dict[str, Any]) -> dict[str, Any]:
+        self.tiles_read += 1
+        self._cache[key] = entry
+        self._cache.move_to_end(key)
+        while len(self._cache) > self._cache_tiles:
+            self._cache.popitem(last=False)
+        return entry
 
 
 def _bin_span(viewport: Range, s: float, t: float, size: int) -> tuple[int, int]:
