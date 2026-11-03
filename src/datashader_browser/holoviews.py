@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Callable, Sequence
 from typing import Any
 
@@ -28,6 +29,7 @@ def datashade(
     cmap: Sequence[str] | str | None = None,
     how: str = "eq_hist",
     fallback: ParquetSource | None = None,
+    progressive: bool | None = None,
     on_progress: ProgressCallback | None = None,
     cancelled: CancelCallback | None = None,
     transform: Callable[[Any], Any] | None = None,
@@ -45,6 +47,12 @@ def datashade(
       intersect the viewport are read, so pan and zoom cost is independent of
       the number of source rows. When the viewport is zoomed past the deepest
       level, ``fallback`` (if given) is scanned for full resolution.
+
+    ``progressive`` (default: on in the browser) makes pyramid rendering
+    non-blocking: each viewport is drawn at once from cached tiles (using a
+    coarser level where needed), the missing tiles are fetched concurrently
+    in the background, and the plot is redrawn when they arrive. Without it,
+    tiles are read one after another before the plot updates.
     """
 
     pyramid = source if isinstance(source, TilePyramid) else None
@@ -120,20 +128,53 @@ def datashade(
         aggregate.attrs["data_plane"] = "scan"
         return aggregate
 
+    use_progressive = IN_BROWSER if progressive is None else progressive
+    refresh = hv.streams.Stream.define("TileRefresh", generation=0)()
+    background: set[Any] = set()
+    latest: dict[str, Any] = {"view": None, "generation": 0}
+
+    def fetch_then_refresh(view: tuple[Range, Range], missing: list) -> None:
+        async def run() -> None:
+            await pyramid.fetch_tiles(missing)
+            # Redraw only if the user has not moved on to another viewport.
+            if latest["view"] == view:
+                latest["generation"] += 1
+                refresh.event(generation=latest["generation"])
+
+        def done(task: Any) -> None:
+            background.discard(task)
+            if not task.cancelled() and task.exception() is not None:
+                print(f"datashader-browser: tile fetch failed: {task.exception()!r}")
+
+        task = asyncio.ensure_future(run())
+        background.add(task)
+        task.add_done_callback(done)
+
     def render(
         x_range: Range | None = initial_x_range,
         y_range: Range | None = initial_y_range,
+        generation: int = 0,
     ) -> Any:
         visible_x = _coerce_range(x_range, fallback=initial_x_range)
         visible_y = _coerce_range(y_range, fallback=initial_y_range)
         if pyramid is None:
             aggregate = scan(source, visible_x, visible_y)
         else:
+            progressive_now = use_progressive and _event_loop_running()
             aggregate = pyramid.aggregate(
-                visible_x, visible_y, width=width, height=height, agg=reduction
+                visible_x, visible_y, width=width, height=height, agg=reduction,
+                cached_only=progressive_now,
             )
             aggregate.attrs["data_plane"] = "tiles"
-            if fallback is not None and aggregate.attrs["under_resolved"]:
+            if progressive_now:
+                latest["view"] = (visible_x, visible_y)
+                if aggregate.attrs["missing_tiles"]:
+                    fetch_then_refresh(latest["view"], aggregate.attrs["missing_tiles"])
+            if (
+                fallback is not None
+                and aggregate.attrs["under_resolved"]
+                and not aggregate.attrs["missing_tiles"]
+            ):
                 aggregate = scan(fallback, visible_x, visible_y)
         image_x = aggregate.attrs["x_range"]
         image_y = aggregate.attrs["y_range"]
@@ -155,13 +196,27 @@ def datashade(
         x_range=initial_x_range,
         y_range=initial_y_range,
     )
-    dynamic = hv.DynamicMap(render, streams=[ranges])
+    dynamic = hv.DynamicMap(render, streams=[ranges, refresh])
     return dynamic.opts(
         framewise=True,
         width=width,
         height=height,
         active_tools=["wheel_zoom"],
     )
+
+
+def _event_loop_running() -> bool:
+    try:
+        asyncio.get_running_loop()
+        return True
+    except RuntimeError:
+        pass
+    try:
+        # The browser's pyjs WebLoop runs continuously but is not "running"
+        # from the point of view of synchronous code executed in a cell.
+        return asyncio.get_event_loop().is_running()
+    except RuntimeError:
+        return False
 
 
 def _required_columns(x: str, y: str, reduction: Any) -> list[str]:

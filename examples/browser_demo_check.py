@@ -6,6 +6,8 @@ that the kernel re-rendered from deeper pyramid levels.  The site must contain
 ``tiles/nyc-taxi`` (see the Pages workflow).
 
     uv run --with playwright python examples/browser_demo_check.py --site dist --shots .cache/shots
+    uv run --with playwright python examples/browser_demo_check.py \
+        --url https://sumayabee.github.io/datashader-browser --shots .cache/shots
 """
 
 from __future__ import annotations
@@ -25,8 +27,16 @@ PREFIX = "datashader-browser"
 
 
 class QuietHandler(http.server.SimpleHTTPRequestHandler):
+    latency_s = 0.0
+
     def log_message(self, *args):
         pass
+
+    def do_GET(self):
+        # Simulate CDN round-trip latency for tile requests (local mode only).
+        if self.latency_s and self.path.endswith(".npz"):
+            time.sleep(self.latency_s)
+        super().do_GET()
 
     def handle(self):
         try:
@@ -59,21 +69,30 @@ def run_in_new_cell(page, code: str, marker: str, timeout_s: float = 60) -> str:
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--site", type=Path, required=True)
+    source = parser.add_mutually_exclusive_group(required=True)
+    source.add_argument("--site", type=Path, help="local built site to serve")
+    source.add_argument("--url", help="already hosted site, e.g. the GitHub Pages URL")
     parser.add_argument("--shots", type=Path, required=True)
     parser.add_argument("--chrome", default=shutil.which("google-chrome"))
+    parser.add_argument(
+        "--latency-ms", type=float, default=0,
+        help="delay each tile response when serving --site (simulates a CDN)",
+    )
     args = parser.parse_args()
     args.shots.mkdir(parents=True, exist_ok=True)
 
     with tempfile.TemporaryDirectory() as tmp:
-        os.symlink(args.site.resolve(), Path(tmp) / PREFIX)
-        handler = functools.partial(QuietHandler, directory=tmp)
-        server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
-        threading.Thread(target=server.serve_forever, daemon=True).start()
-        url = (
-            f"http://127.0.0.1:{server.server_address[1]}/{PREFIX}/lab/index.html"
-            "?path=nyc-taxi-tiles.ipynb"
-        )
+        server = None
+        if args.url:
+            base = args.url.rstrip("/")
+        else:
+            QuietHandler.latency_s = args.latency_ms / 1000
+            os.symlink(args.site.resolve(), Path(tmp) / PREFIX)
+            handler = functools.partial(QuietHandler, directory=tmp)
+            server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
+            threading.Thread(target=server.serve_forever, daemon=True).start()
+            base = f"http://127.0.0.1:{server.server_address[1]}/{PREFIX}"
+        url = f"{base}/lab/index.html?path=nyc-taxi-tiles.ipynb"
 
         from playwright.sync_api import sync_playwright
 
@@ -144,7 +163,8 @@ def main() -> None:
                 "LEVEL",
             )
             browser.close()
-        server.shutdown()
+        if server is not None:
+            server.shutdown()
 
     print(f"first render after page load: {first_render:.1f}s")
     print(f"before zoom: {before}; after zoom: {after}; deepest {level}")

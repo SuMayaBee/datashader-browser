@@ -142,3 +142,66 @@ def pyramid_path(pyramid: TilePyramid):
     from pathlib import Path
 
     return Path(pyramid.location)
+
+
+def test_cached_only_falls_back_and_lists_missing_tiles(frame, tmp_path):
+    pyramid = build_pyramid(
+        chunks(frame), tmp_path, "x", "y",
+        x_range=X_RANGE, y_range=Y_RANGE, max_level=3, tile_size=16,
+    )
+    pyramid.aggregate(level=0)  # cache the overview only
+
+    view = pyramid.aggregate((-4, 4), (-2, 2), width=60, height=30, cached_only=True)
+
+    assert view.attrs["target_level"] == 3
+    assert view.attrs["pyramid_level"] == 0  # complete, coarser image
+    assert view.attrs["missing_tiles"]
+    assert all(key[0] == 3 for key in view.attrs["missing_tiles"])
+    assert pyramid.tiles_read == 1  # cached_only never reads
+
+
+def test_fetch_tiles_reads_concurrently_and_once(frame, tmp_path):
+    import asyncio
+
+    build_pyramid(
+        chunks(frame), tmp_path, "x", "y",
+        x_range=X_RANGE, y_range=Y_RANGE, max_level=3, tile_size=16,
+    )
+    active = peak = 0
+    requested: list[str] = []
+
+    async def slow_read(name: str) -> bytes:
+        nonlocal active, peak
+        requested.append(name)
+        active += 1
+        peak = max(peak, active)
+        await asyncio.sleep(0.02)  # stands in for network latency
+        active -= 1
+        return (tmp_path / name).read_bytes()
+
+    pyramid = TilePyramid(tmp_path, async_reader=slow_read, max_concurrent_reads=8)
+    keys = pyramid.tiles_needed(level=3)
+
+    async def run():
+        # Two overlapping requests for the same tiles must not read them twice.
+        return await asyncio.gather(pyramid.fetch_tiles(keys), pyramid.fetch_tiles(keys))
+
+    started = asyncio.run(run())
+
+    assert len(keys) > 8
+    assert peak == 8  # requests overlap, bounded by max_concurrent_reads
+    assert sorted(requested) == sorted(f"{l}/{r}-{c}.npz" for l, r, c in keys)
+    assert sum(started) == len(keys)
+    view = pyramid.aggregate(level=3, cached_only=True)
+    assert view.attrs["missing_tiles"] == [] and view.attrs["pyramid_level"] == 3
+
+
+def test_aggregate_async_matches_aggregate(frame, pyramid):
+    import asyncio
+
+    fresh = TilePyramid(pyramid.location)
+    expected = pyramid.aggregate((-3, 5), (-2, 3), width=70, height=40, agg=ds.max("value"))
+    actual = asyncio.run(
+        fresh.aggregate_async((-3, 5), (-2, 3), width=70, height=40, agg=ds.max("value"))
+    )
+    np.testing.assert_array_equal(actual.values, expected.values)

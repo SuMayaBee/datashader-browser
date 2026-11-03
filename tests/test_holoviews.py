@@ -104,3 +104,35 @@ def test_datashade_reads_tiles_and_falls_back_when_under_resolved(tmp_path):
     deep = dynamic[()]
     assert deep.data.attrs["data_plane"] == "scan"
     assert deep.data.attrs["x_range"] == (10.0, 12.0)
+
+
+def test_progressive_tiles_redraw_after_background_fetch(tmp_path):
+    import asyncio
+
+    hv = pytest.importorskip("holoviews")
+    from datashader_browser import TilePyramid, build_pyramid
+
+    rng = np.random.default_rng(5)
+    frame = pd.DataFrame({"x": rng.uniform(0, 100, 5_000), "y": rng.uniform(0, 100, 5_000)})
+    build_pyramid([frame], tmp_path, "x", "y", x_range=(0, 100), y_range=(0, 100),
+                  max_level=3, tile_size=16)
+    pyramid = TilePyramid(tmp_path)
+
+    async def scenario():
+        dynamic = datashade(pyramid, width=60, height=60, progressive=True)
+        first = dynamic[()]
+        assert first.data.attrs["missing_tiles"]  # nothing cached yet
+        assert pyramid.tiles_read == 0  # rendering did not block on reads
+        refresh = dynamic.streams[1]
+        for _ in range(200):  # the background fetch fires the refresh stream
+            await asyncio.sleep(0.01)
+            if refresh.generation:
+                break
+        assert refresh.generation == 1
+        # A live plot re-renders on the event; here, evaluate it explicitly.
+        return dynamic[()]
+
+    final = asyncio.run(scenario())
+    assert isinstance(final, hv.RGB)
+    assert final.data.attrs["missing_tiles"] == []
+    assert final.data.attrs["pyramid_level"] == final.data.attrs["target_level"] == 2
