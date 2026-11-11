@@ -37,8 +37,12 @@ data = [
 holoviews = [
     "holoviews>=1.21,<2",
 ]
+map = [
+    "pillow>=11",
+]
 test = [
     "holoviews>=1.21,<2",
+    "pillow>=11",
     "pytest>=8",
 ]
 

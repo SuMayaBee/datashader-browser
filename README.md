@@ -140,6 +140,64 @@ and produced 25,245 tiles (176 MiB, including the four `fare_amount` fields). A
 Pyramids support `count`, `sum`, `mean`, `min` and `max` on points. Other
 reductions still use a scan. Try `tile-pyramid.ipynb` in the live demo.
 
+## Use a tile pyramid in your own web map
+
+`TileMap` renders an image overlay for a viewport. It works with a local
+pyramid or an HTTP(S) URL. Install `datashader-browser[map]` for PNG output.
+Create one renderer per dataset to reuse its tile cache between zooms.
+
+```python
+from datashader_browser import TileMap
+
+tile_map = TileMap("https://example.org/tiles")
+image = await tile_map.render([xmin, ymin, xmax, ymax], 800, 500)
+```
+
+Use the pyramid's coordinate system for the requested bounds. Draw
+`image["url"]` over `image["bounds"]`, which are snapped to bin edges.
+`width` and `height` in the result are the actual PNG dimensions.
+A view entirely outside the dataset returns `None`. If you want a fixed
+color scale across views, create the renderer with `how="linear"` and an
+explicit `span`.
+
+For a standalone page, start a Web Worker with a Python WebAssembly runtime
+that provides `pyjs`, Datashader and Pillow. In the worker's Python startup
+code, register the renderer and then signal that the worker is ready:
+
+```python
+from datashader_browser import TileMap, serve_tile_map
+from pyjs import js
+
+disconnect = serve_tile_map(TileMap("https://example.org/tiles"))
+js.self.postMessage("datashader:ready")
+```
+
+Once the worker is ready, send requests from your map's viewport-change
+handler. Supply the map's bounds in the pyramid's coordinate system and
+use the returned bounds when positioning the overlay.
+
+```javascript
+let latest = 0;
+
+function requestOverlay(bounds, width, height) {
+  worker.postMessage({
+    type: "datashader:render", id: ++latest, bounds, width, height,
+  });
+}
+
+worker.addEventListener("message", ({ data }) => {
+  if (data?.type !== "datashader:result" || data.id !== latest) return;
+  if (data.error) {
+    console.error(data.error);
+    return;
+  }
+  updateOverlay(data.image); // Your map code places or clears the overlay.
+});
+```
+
+The web app supplies the worker runtime and map UI. The tiles can be hosted
+with the app on a static site or on a server that allows cross-origin reads.
+
 ## NYC Taxi real-data verification
 
 The streaming accumulator successfully rendered all **11,842,094 pickup
